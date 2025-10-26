@@ -244,6 +244,9 @@ p11_rpc_message_verify_part (p11_rpc_message *msg,
 	return ok;
 }
 
+static p11_rpc_value_type
+map_attribute_to_value_type(CK_ATTRIBUTE_TYPE type);
+
 static void
 p11_rpc_message_write_attribute_buffer_array (p11_rpc_message *msg,
 					      CK_ATTRIBUTE_PTR arr,
@@ -251,6 +254,7 @@ p11_rpc_message_write_attribute_buffer_array (p11_rpc_message *msg,
 {
 	CK_ATTRIBUTE_PTR attr;
 	CK_ULONG i;
+	uint32_t valueLenSerialized;
 
 	assert (num == 0 || arr != NULL);
 
@@ -264,7 +268,11 @@ p11_rpc_message_write_attribute_buffer_array (p11_rpc_message *msg,
 		p11_rpc_buffer_add_uint32 (msg->output, attr->type);
 
 		/* And the attribute buffer length */
-		p11_rpc_buffer_add_uint32 (msg->output, attr->pValue ? attr->ulValueLen : 0);
+		valueLenSerialized = attr->pValue ? attr->ulValueLen : 0;
+		/* For ULONG attribures we always serialize the lenght as 8 even if it is not 8 on the current platform */
+		if (sizeof(CK_ULONG) != 8 && valueLenSerialized == sizeof(CK_ULONG) && map_attribute_to_value_type(attr->type) == P11_RPC_VALUE_ULONG)
+			valueLenSerialized = 8;
+		p11_rpc_buffer_add_uint32 (msg->output, valueLenSerialized);
 
 		if (attr->pValue && IS_ATTRIBUTE_ARRAY (attr))
 			p11_rpc_message_write_attribute_buffer_array (
@@ -1168,6 +1176,7 @@ p11_rpc_buffer_add_attribute (p11_buffer *buffer, const CK_ATTRIBUTE *attr)
 	unsigned char validity;
 	p11_rpc_attribute_serializer *serializer;
 	p11_rpc_value_type value_type;
+	uint32_t valueLenSerialized;
 
 	/* The attribute type */
 	if (attr->type > UINT32_MAX) {
@@ -1188,7 +1197,11 @@ p11_rpc_buffer_add_attribute (p11_buffer *buffer, const CK_ATTRIBUTE *attr)
 		p11_buffer_fail (buffer);
 		return;
 	}
-	p11_rpc_buffer_add_uint32 (buffer, attr->ulValueLen);
+	valueLenSerialized = attr->ulValueLen;
+	/* For ULONG attribures we always serialize the lenght as 8 even if it is not 8 on the current platform */
+	if (sizeof(CK_ULONG) != 8 && valueLenSerialized == sizeof(CK_ULONG) && map_attribute_to_value_type(attr->type) == P11_RPC_VALUE_ULONG)
+		valueLenSerialized = 8;
+	p11_rpc_buffer_add_uint32 (buffer, valueLenSerialized);
 
 	/* The attribute value */
 	value_type = map_attribute_to_value_type (attr->type);
@@ -1377,6 +1390,10 @@ p11_rpc_message_get_attribute (p11_rpc_message *msg,
 	assert (value_type < ELEMS (p11_rpc_attribute_serializers));
 	serializer = &p11_rpc_attribute_serializers[value_type];
 	assert (serializer != NULL);
+
+	/* Length of ULONG attribures is always serialized as 8, deserialize to value of current platform */
+	if (sizeof(CK_ULONG) != 8 && length == 8 && value_type == P11_RPC_VALUE_ULONG)
+		length = sizeof(CK_ULONG);
 
 	/* Get the attribute value length */
 	saved_offset = *offset;
